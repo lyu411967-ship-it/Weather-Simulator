@@ -59,7 +59,6 @@
 </div>
 
 <script>
-// ==================== ХОЛСТ ====================
 const canvas = document.getElementById('film');
 const ctx = canvas.getContext('2d');
 function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
@@ -78,7 +77,6 @@ const drops = Array.from({length:240}, () => ({
   x: Math.random(), y: Math.random(), len: Math.random()*14+8
 }));
 
-// ==================== ПАЛИТРЫ ====================
 const PANES = {
   night:   { top:[5,5,26],   bot:[13,18,48] },
   storm:   { top:[6,8,20],   bot:[16,24,48] },
@@ -105,7 +103,6 @@ const SEA = {
   aurora: [[15,35,65],[8,18,42]]
 };
 
-// ==================== ЗВУК ====================
 let actx = null, windGain = null, muted = false;
 const WIND = { night:0.04, storm:0.22, rain:0.15, fog:0.08, snow:0.06,
   dawn:0.03, sunset:0.05, clear:0.02, wind:0.3, aurora:0.03 };
@@ -134,15 +131,12 @@ function thump() {
   o.start(); o.stop(actx.currentTime+0.4);
 }
 
-// ==================== ПЕРЕХОД ПОГОДЫ ====================
-let from = 'night', to = 'night', trans = 1; // trans: 0 → 1, где 1 = полностью «to»
+let from = 'night', to = 'night', trans = 1; 
 const TRANS_MS = 2000;
 
 function setWeather(w) {
   if (w === to) return;
-  // если переход ещё идёт — стартуем из промежуточного состояния
   if (trans < 1) {
-    // застываем текущий смешанный цвет как «from» — просто считаем from = to, но сбрасываем
     from = to;
   } else {
     from = to;
@@ -162,16 +156,13 @@ function mix(a, b, k) {
 }
 function css(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
 
-// интенсивности эффектов: старый гаснет, новый нарастает
 function fxIntensity(name) {
-  // name ∈ rain, snow, fog, wind, aurora, storm(rain+lightning)
   const k = trans; // 0..1
   if (name === to)   return k;
   if (name === from) return 1-k;
   return 0;
 }
 
-// ==================== РИСОВАНИЕ ====================
 function drawSea(t, amp, baseY, c1, c2) {
   for (let k=0;k<2;k++) {
     ctx.beginPath();
@@ -313,16 +304,13 @@ function drawBeam(lx, ly, angle, strength) {
   ctx.restore();
 }
 
-// ==================== ЦИКЛ ====================
 let flash = 0;
 
 function draw() {
   const t = performance.now();
 
-  // двигаем переход
   if (trans < 1) {
     trans = Math.min(1, trans + 16.7 / TRANS_MS);
-    // звук ветра плавно скользит
     if (windGain && !muted) {
       const target = WIND[from] + (WIND[to]-WIND[from])*trans;
       windGain.gain.value = target;
@@ -334,22 +322,18 @@ function draw() {
   const skyTop = mix(A.top, B.top, k);
   const skyBot = mix(A.bot, B.bot, k);
 
-  // небо
   const g = ctx.createLinearGradient(0,0,0,H());
   g.addColorStop(0, css(skyTop,1));
   g.addColorStop(1, css(skyBot,1));
   ctx.fillStyle = g; ctx.fillRect(0,0,W(),H());
 
-  // звёзды и луна — интенсивность: ночью/сиянии/ветре есть, иначе нет
   const starA = isStarry(from)* (1-k) + isStarry(to)*k;
   drawStars(t, starA);
   if (starA > 0.02 && (from==='night'||to==='night'))
     drawMoon(W()*0.18, H()*0.18, starA);
 
-  // сияние
   drawAurora(t, fxIntensity('aurora'));
 
-  // море — смешиваем цвета
   const sA = SEA[from], sB = SEA[to];
   const sea1 = mix(sA[0], sB[0], k), sea2 = mix(sA[1], sB[1], k);
   const amp = (from==='storm'||from==='wind'?26:7)*(1-k) +
@@ -357,19 +341,16 @@ function draw() {
   const baseY = H()*0.84;
   drawSea(t, amp, baseY, css(sea1,0.85), css(sea2,0.9));
 
-  // маяк
   const l = drawTower(W()*0.72, H()*0.78, true, t);
   const beam = (from==='storm'?1.6:1)*(1-k) + (to==='storm'?1.6:1)*k;
   drawBeam(l.x, l.y, t*0.0007, beam);
 
-  // эффекты — кроссфейд
   drawRain(fxIntensity('rain'));
-  drawRain(fxIntensity('storm') * 1); // гроза = дождь + молнии
+  drawRain(fxIntensity('storm') * 1); 
   drawSnow(t, fxIntensity('snow'));
   drawFog(t, fxIntensity('fog') + fxIntensity('dawn')*0.5 + fxIntensity('sunset')*0.5);
   drawWindLines(t, fxIntensity('wind'));
 
-  // молнии — только пока гроза «присутствует»
   const stormI = fxIntensity('storm');
   if (stormI > 0.05) {
     if (Math.random() < 0.02*stormI) flash = 1;
@@ -389,7 +370,6 @@ function isStarry(w) {
   return (w==='night'||w==='aurora'||w==='wind') ? 1 : 0;
 }
 
-// ==================== УПРАВЛЕНИЕ ====================
 document.querySelectorAll('.mood-btn').forEach(btn => {
   btn.onclick = () => {
     initAudio();
@@ -405,7 +385,6 @@ document.getElementById('muteBtn').onclick = e => {
   e.target.textContent = muted ? '🔇' : '🔊';
 };
 
-// автосмена, если 45 сек не трогать
 let lastUser = Date.now();
 document.getElementById('mood-panel').addEventListener('click', () => lastUser = Date.now());
 const ORDER = ['night','storm','rain','fog','snow','dawn','sunset','clear','wind','aurora'];
