@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Simulator — Погода</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI',sans-serif; }
+  html,body { height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; width:100vw; height:100vh; }
+
+  #mood-panel {
+    position:fixed; bottom:0; left:0; width:100%;
+    background:rgba(0,0,0,0.75); backdrop-filter:blur(8px);
+    display:flex; align-items:center; justify-content:center;
+    gap:8px; flex-wrap:wrap;
+    border-top:1px solid rgba(255,255,255,0.1);
+    padding:10px 12px;
+  }
+  .mood-btn {
+    background:rgba(255,255,255,0.08); color:#fff; border:none;
+    padding:8px 14px; border-radius:20px; cursor:pointer;
+    font-size:0.9em; transition:0.4s;
+  }
+  .mood-btn:hover { background:rgba(255,255,255,0.2); }
+  .mood-btn.active { background:#ffcc55; color:#000; font-weight:bold; }
+
+  .ctl { position:fixed; top:15px; right:15px; display:flex; gap:8px; }
+  .ctl button {
+    background:rgba(255,255,255,0.12); color:#fff; border:none;
+    border-radius:8px; padding:8px 14px; cursor:pointer; font-size:1em;
+  }
+
+  #title {
+    position:fixed; top:15px; left:15px; color:rgba(255,255,255,0.5);
+    font-size:1.1em; letter-spacing:2px; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="film"></canvas>
+<div id="title">Weather Simulator</div>
+<div class="ctl">
+  <button id="muteBtn">🔊</button>
+</div>
+
+<div id="mood-panel">
+  <button class="mood-btn active" data-w="night">🌙 Night</button>
+  <button class="mood-btn" data-w="storm">⛈ Storm</button>
+  <button class="mood-btn" data-w="rain">🌧 Rain</button>
+  <button class="mood-btn" data-w="fog">🌫 Fog</button>
+  <button class="mood-btn" data-w="snow">❄ Snow</button>
+  <button class="mood-btn" data-w="dawn">🌅 Dawn</button>
+  <button class="mood-btn" data-w="sunset">🌇 Sunset</button>
+  <button class="mood-btn" data-w="clear">☀ Clear</button>
+  <button class="mood-btn" data-w="wind">💨 Wind</button>
+  <button class="mood-btn" data-w="aurora">🌌 Aurora</button>
+</div>
+
+<script>
+// ==================== ХОЛСТ ====================
+const canvas = document.getElementById('film');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+const W = () => canvas.width, H = () => canvas.height;
+
+const stars = Array.from({length:170}, () => ({
+  x: Math.random(), y: Math.random()*0.6,
+  r: Math.random()*1.4+0.3, ph: Math.random()*6.28
+}));
+const flakes = Array.from({length:180}, () => ({
+  x: Math.random(), y: Math.random(),
+  r: Math.random()*2.4+0.8, sp: Math.random()*0.6+0.3, drift: Math.random()*2
+}));
+const drops = Array.from({length:240}, () => ({
+  x: Math.random(), y: Math.random(), len: Math.random()*14+8
+}));
+
+// ==================== ПАЛИТРЫ ====================
+const PANES = {
+  night:   { top:[5,5,26],   bot:[13,18,48] },
+  storm:   { top:[6,8,20],   bot:[16,24,48] },
+  rain:    { top:[10,14,28], bot:[20,28,52] },
+  fog:     { top:[26,32,48], bot:[42,50,68] },
+  snow:    { top:[20,28,44], bot:[36,48,72] },
+  dawn:    { top:[42,32,80], bot:[106,64,96] },
+  sunset:  { top:[58,24,64], bot:[138,64,48] },
+  clear:   { top:[42,90,154],bot:[122,176,216] },
+  wind:    { top:[16,24,40], bot:[28,36,56] },
+  aurora:  { top:[2,8,20],   bot:[10,24,48] }
+};
+
+const SEA = {
+  night:  [[20,30,60],[10,16,40]],
+  storm:  [[25,40,75],[12,20,45]],
+  rain:   [[22,34,66],[12,18,44]],
+  fog:    [[60,70,90],[35,42,60]],
+  snow:   [[70,85,120],[38,48,75]],
+  dawn:   [[90,60,90],[45,32,60]],
+  sunset: [[120,60,70],[60,30,40]],
+  clear:  [[60,110,160],[30,60,95]],
+  wind:   [[24,36,64],[12,18,44]],
+  aurora: [[15,35,65],[8,18,42]]
+};
+
+// ==================== ЗВУК ====================
+let actx = null, windGain = null, muted = false;
+const WIND = { night:0.04, storm:0.22, rain:0.15, fog:0.08, snow:0.06,
+  dawn:0.03, sunset:0.05, clear:0.02, wind:0.3, aurora:0.03 };
+
+function initAudio() {
+  if (actx) return;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = actx.createBuffer(1, actx.sampleRate*2, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i=0;i<d.length;i++){ const w=Math.random()*2-1; d[i]=(last+0.02*w)/1.02; last=d[i]; }
+  const src = actx.createBufferSource(); src.buffer = buf; src.loop = true;
+  const filt = actx.createBiquadFilter(); filt.type='lowpass'; filt.frequency.value=350;
+  windGain = actx.createGain();
+  src.connect(filt); filt.connect(windGain); windGain.connect(actx.destination);
+  src.start();
+}
+
+function thump() {
+  if (!actx || muted) return;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = 55; o.type = 'sine';
+  g.gain.setValueAtTime(0.35, actx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime+0.35);
+  o.connect(g); g.connect(actx.destination);
+  o.start(); o.stop(actx.currentTime+0.4);
+}
+
+// ==================== ПЕРЕХОД ПОГОДЫ ====================
+let from = 'night', to = 'night', trans = 1; // trans: 0 → 1, где 1 = полностью «to»
+const TRANS_MS = 2000;
+
+function setWeather(w) {
+  if (w === to) return;
+  // если переход ещё идёт — стартуем из промежуточного состояния
+  if (trans < 1) {
+    // застываем текущий смешанный цвет как «from» — просто считаем from = to, но сбрасываем
+    from = to;
+  } else {
+    from = to;
+  }
+  to = w;
+  trans = 0;
+  document.querySelectorAll('.mood-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.w === w));
+}
+
+function mix(a, b, k) {
+  return [
+    Math.round(a[0]+(b[0]-a[0])*k),
+    Math.round(a[1]+(b[1]-a[1])*k),
+    Math.round(a[2]+(b[2]-a[2])*k)
+  ];
+}
+function css(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+
+// интенсивности эффектов: старый гаснет, новый нарастает
+function fxIntensity(name) {
+  // name ∈ rain, snow, fog, wind, aurora, storm(rain+lightning)
+  const k = trans; // 0..1
+  if (name === to)   return k;
+  if (name === from) return 1-k;
+  return 0;
+}
+
+// ==================== РИСОВАНИЕ ====================
+function drawSea(t, amp, baseY, c1, c2) {
+  for (let k=0;k<2;k++) {
+    ctx.beginPath();
+    ctx.moveTo(0, H());
+    for (let x=0;x<=W();x+=12) {
+      const y = baseY + k*26 + Math.sin(x*0.015 + t*0.0012*(1+k*0.4) + k*2)*amp;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W(), H()); ctx.closePath();
+    ctx.fillStyle = k===0 ? c1 : c2;
+    ctx.fill();
+  }
+}
+
+function drawStars(t, alpha) {
+  if (alpha <= 0.01) return;
+  stars.forEach(s => {
+    const a = (0.35 + 0.65*Math.abs(Math.sin(t*0.0015 + s.ph))) * alpha;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#dfe8ff';
+    ctx.beginPath(); ctx.arc(s.x*W(), s.y*H(), s.r, 0, 6.28); ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawMoon(x, y, alpha) {
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(230,235,255,0.9)';
+  ctx.beginPath(); ctx.arc(x, y, 26, 0, 6.28); ctx.fill();
+  ctx.fillStyle = 'rgba(230,235,255,0.08)';
+  ctx.beginPath(); ctx.arc(x, y, 60, 0, 6.28); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawAurora(t, alpha) {
+  if (alpha <= 0.01) return;
+  for (let band=0; band<3; band++) {
+    ctx.beginPath();
+    for (let x=0; x<=W(); x+=20) {
+      const y = H()*0.15 + band*40 + Math.sin(x*0.004 + t*0.0008 + band*2)*60;
+      ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = `hsla(${(t*0.05 + band*60)%360}, 90%, 60%, ${0.25*alpha})`;
+    ctx.lineWidth = 40 + band*15;
+    ctx.stroke();
+  }
+}
+
+function drawRain(alpha) {
+  if (alpha <= 0.01) return;
+  ctx.strokeStyle = `rgba(160,190,255,${0.35*alpha})`;
+  ctx.lineWidth = 1.4;
+  drops.forEach(d => {
+    d.y += 0.012 + d.len*0.001;
+    if (d.y > 1.1) d.y = -0.1;
+    const x = d.x*W(), y = d.y*H();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x-4, y+d.len);
+    ctx.stroke();
+  });
+}
+
+function drawSnow(t, alpha) {
+  if (alpha <= 0.01) return;
+  ctx.fillStyle = `rgba(240,248,255,${0.85*alpha})`;
+  flakes.forEach(f => {
+    f.y += f.sp*0.002;
+    if (f.y > 1.05) f.y = -0.05;
+    const x = (f.x*W() + Math.sin(t*0.001+f.drift)*30 + W()) % W();
+    ctx.beginPath();
+    ctx.arc(x, f.y*H(), f.r, 0, 6.28);
+    ctx.fill();
+  });
+}
+
+function drawFog(t, alpha) {
+  if (alpha <= 0.01) return;
+  for (let i=0;i<8;i++) {
+    const fx = ((t*0.04 + i*260) % (W()+400)) - 200;
+    ctx.fillStyle = `rgba(180,190,215,${0.07*alpha})`;
+    ctx.beginPath();
+    ctx.ellipse(fx, H()*(0.35+0.12*(i%4)), 260, 70, 0, 0, 6.28);
+    ctx.fill();
+  }
+}
+
+function drawWindLines(t, alpha) {
+  if (alpha <= 0.01) return;
+  ctx.strokeStyle = `rgba(200,220,255,${0.12*alpha})`;
+  ctx.lineWidth = 1.5;
+  for (let i=0;i<14;i++) {
+    const y = H()*(0.2 + 0.06*i);
+    const x1 = ((t*0.25 + i*400) % (W()+600)) - 300;
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.quadraticCurveTo(x1+150, y-20, x1+320, y+8);
+    ctx.stroke();
+  }
+}
+
+function drawTower(x, baseY, lampOn, t) {
+  ctx.fillStyle = '#0c0f1e';
+  ctx.beginPath();
+  ctx.moveTo(x-140, H());
+  ctx.quadraticCurveTo(x-60, baseY+20, x, baseY);
+  ctx.quadraticCurveTo(x+80, baseY+10, x+160, H());
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#1a1e33';
+  ctx.beginPath();
+  ctx.moveTo(x-22, baseY);
+  ctx.lineTo(x-13, baseY-130);
+  ctx.lineTo(x+13, baseY-130);
+  ctx.lineTo(x+22, baseY);
+  ctx.closePath(); ctx.fill();
+  const lampY = baseY-145;
+  ctx.fillStyle = '#12152a';
+  ctx.fillRect(x-16, lampY-14, 32, 22);
+  if (lampOn) {
+    ctx.fillStyle = '#ffe680';
+    ctx.beginPath(); ctx.arc(x, lampY-3, 8+Math.sin(t*0.004)*2, 0, 6.28); ctx.fill();
+    ctx.fillStyle = 'rgba(255,230,128,0.25)';
+    ctx.beginPath(); ctx.arc(x, lampY-3, 22, 0, 6.28); ctx.fill();
+  }
+  return { x, y: lampY-3 };
+}
+
+function drawBeam(lx, ly, angle, strength) {
+  ctx.save();
+  ctx.translate(lx, ly);
+  ctx.rotate(angle);
+  const g = ctx.createLinearGradient(0,0,900,0);
+  g.addColorStop(0, `rgba(255,235,150,${0.35*strength})`);
+  g.addColorStop(1, 'rgba(255,235,150,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(900,-90); ctx.lineTo(900,90);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ==================== ЦИКЛ ====================
+let flash = 0;
+
+function draw() {
+  const t = performance.now();
+
+  // двигаем переход
+  if (trans < 1) {
+    trans = Math.min(1, trans + 16.7 / TRANS_MS);
+    // звук ветра плавно скользит
+    if (windGain && !muted) {
+      const target = WIND[from] + (WIND[to]-WIND[from])*trans;
+      windGain.gain.value = target;
+    }
+  }
+
+  const k = trans;
+  const A = PANES[from], B = PANES[to];
+  const skyTop = mix(A.top, B.top, k);
+  const skyBot = mix(A.bot, B.bot, k);
+
+  // небо
+  const g = ctx.createLinearGradient(0,0,0,H());
+  g.addColorStop(0, css(skyTop,1));
+  g.addColorStop(1, css(skyBot,1));
+  ctx.fillStyle = g; ctx.fillRect(0,0,W(),H());
+
+  // звёзды и луна — интенсивность: ночью/сиянии/ветре есть, иначе нет
+  const starA = isStarry(from)* (1-k) + isStarry(to)*k;
+  drawStars(t, starA);
+  if (starA > 0.02 && (from==='night'||to==='night'))
+    drawMoon(W()*0.18, H()*0.18, starA);
+
+  // сияние
+  drawAurora(t, fxIntensity('aurora'));
+
+  // море — смешиваем цвета
+  const sA = SEA[from], sB = SEA[to];
+  const sea1 = mix(sA[0], sB[0], k), sea2 = mix(sA[1], sB[1], k);
+  const amp = (from==='storm'||from==='wind'?26:7)*(1-k) +
+              (to==='storm'||to==='wind'?26:7)*k;
+  const baseY = H()*0.84;
+  drawSea(t, amp, baseY, css(sea1,0.85), css(sea2,0.9));
+
+  // маяк
+  const l = drawTower(W()*0.72, H()*0.78, true, t);
+  const beam = (from==='storm'?1.6:1)*(1-k) + (to==='storm'?1.6:1)*k;
+  drawBeam(l.x, l.y, t*0.0007, beam);
+
+  // эффекты — кроссфейд
+  drawRain(fxIntensity('rain'));
+  drawRain(fxIntensity('storm') * 1); // гроза = дождь + молнии
+  drawSnow(t, fxIntensity('snow'));
+  drawFog(t, fxIntensity('fog') + fxIntensity('dawn')*0.5 + fxIntensity('sunset')*0.5);
+  drawWindLines(t, fxIntensity('wind'));
+
+  // молнии — только пока гроза «присутствует»
+  const stormI = fxIntensity('storm');
+  if (stormI > 0.05) {
+    if (Math.random() < 0.02*stormI) flash = 1;
+    flash *= 0.9;
+    if (flash > 0.08) {
+      ctx.fillStyle = `rgba(255,255,255,${flash*0.55*stormI})`;
+      ctx.fillRect(0,0,W(),H());
+      if (Math.random()<0.1) thump();
+    }
+    if (Math.random() < 0.008*stormI) thump();
+  }
+
+  requestAnimationFrame(draw);
+}
+
+function isStarry(w) {
+  return (w==='night'||w==='aurora'||w==='wind') ? 1 : 0;
+}
+
+// ==================== УПРАВЛЕНИЕ ====================
+document.querySelectorAll('.mood-btn').forEach(btn => {
+  btn.onclick = () => {
+    initAudio();
+    if (actx.state === 'suspended') actx.resume();
+    setWeather(btn.dataset.w);
+  };
+});
+
+document.getElementById('muteBtn').onclick = e => {
+  initAudio();
+  muted = !muted;
+  if (windGain) windGain.gain.value = muted ? 0 : WIND[to];
+  e.target.textContent = muted ? '🔇' : '🔊';
+};
+
+// автосмена, если 45 сек не трогать
+let lastUser = Date.now();
+document.getElementById('mood-panel').addEventListener('click', () => lastUser = Date.now());
+const ORDER = ['night','storm','rain','fog','snow','dawn','sunset','clear','wind','aurora'];
+setInterval(() => {
+  if (Date.now() - lastUser > 45000) {
+    const i = ORDER.indexOf(to);
+    setWeather(ORDER[(i+1) % ORDER.length]);
+  }
+}, 45000);
+
+draw();
+</script>
+</body>
+</html>
